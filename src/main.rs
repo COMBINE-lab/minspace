@@ -38,20 +38,32 @@ fn main() -> anyhow::Result<()> {
 
     let mut mins = Vec::<u64>::new();
     let mut max_token = 0_u64;
+    let mut first_record = true;
+    // loop over the input extracting records
     while let Some(record) = reader.next() {
+        // if we observe more than one record, then skip the rest and notify the user
+        if !first_record {
+            info!(
+                "currently, only 1 input record is supported (i.e. no generalized minspace conversion); skipping subsequent records"
+            );
+            break;
+        }
+        // assume we have only one record for now
         let record = record.expect("Error reading record");
         let min_iter = MinimizerBuilder::<u64>::new()
             .minimizer_size(10)
             .width(31)
             .canonical()
             .iter(record.seq());
-
+        // loop over the record extracting minimizers
         for (minimizer, _position, _is_rc) in min_iter {
             max_token = max_token.max(minimizer);
             mins.push(minimizer);
         }
+        first_record = false;
     }
 
+    // open the output file
     let out_file = OpenOptions::new()
         .read(false)
         .write(true)
@@ -60,6 +72,8 @@ fn main() -> anyhow::Result<()> {
         .open(cli.output.clone())?;
     let mut out = BufWriter::new(out_file);
 
+    // if the length or the largest value is >= i32::MAX, then we'll have to use the
+    // i64 minspace representation.
     if mins.len() >= (i32::MAX as usize) || max_token >= (i32::MAX as u64) {
         info!(
             "length of minimizer string = {}, maximum token = {}",
@@ -75,6 +89,7 @@ fn main() -> anyhow::Result<()> {
         out.write_all(&max_token.to_le_bytes())?;
         out.write_all(mins.as_bytes())?;
     } else {
+        // otherwise we can use a 32-bit minspace representation
         info!(
             "length of minimizer string = {}, maximum token = {}",
             mins.len(),

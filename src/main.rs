@@ -34,7 +34,8 @@ fn main() -> anyhow::Result<()> {
     fmt::fmt().init();
 
     info!("input: {}", input.display());
-    let mut reader = Reader::from_path(input).unwrap();
+    let (reader, _format) = niffler::from_path(input)?;
+    let mut reader = Reader::new(reader);
 
     let mut mins = Vec::<u64>::new();
     let mut max_token = 0_u64;

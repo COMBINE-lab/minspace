@@ -10,10 +10,19 @@ use zerocopy::IntoBytes;
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
+#[command(group(
+    clap::ArgGroup::new("input")
+    .required(true)
+    .args(["input_fasta", "input_concat"])
+))]
 struct Cli {
-    /// input file
-    #[arg(short, long)]
-    input: PathBuf,
+    /// input FASTA file
+    #[arg(short = 'f', long)]
+    input_fasta: Option<PathBuf>,
+
+    /// input CONCAT file
+    #[arg(short = 'c', long, conflicts_with = "input_fasta")]
+    input_concat: Option<PathBuf>,
 
     /// output file
     #[arg(short, long)]
@@ -30,38 +39,60 @@ struct Cli {
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
-    let input = cli.input;
     fmt::fmt().init();
 
+    let is_fasta = cli.input_fasta.is_some();
+    let input = cli
+        .input_fasta
+        .xor(cli.input_concat)
+        .expect("one of FASTA or CONCAT must be provided");
     info!("input: {}", input.display());
-    let (reader, _format) = niffler::from_path(input)?;
-    let mut reader = Reader::new(reader);
 
+    let (mut reader, _format) = niffler::from_path(input)?;
     let mut mins = Vec::<u64>::new();
     let mut max_token = 0_u64;
-    let mut first_record = true;
-    // loop over the input extracting records
-    while let Some(record) = reader.next() {
-        // if we observe more than one record, then skip the rest and notify the user
-        if !first_record {
-            info!(
-                "currently, only 1 input record is supported (i.e. no generalized minspace conversion); skipping subsequent records"
-            );
-            break;
+
+    if is_fasta {
+        let mut reader = Reader::new(reader);
+
+        let mut first_record = true;
+        // loop over the input extracting records
+        while let Some(record) = reader.next() {
+            // if we observe more than one record, then skip the rest and notify the user
+            if !first_record {
+                info!(
+                    "currently, only 1 input record is supported (i.e. no generalized minspace conversion); skipping subsequent records"
+                );
+                break;
+            }
+            // assume we have only one record for now
+            let record = record.expect("Error reading record");
+            let min_iter = MinimizerBuilder::<u64>::new()
+                .minimizer_size(cli.l)
+                .width(cli.w as u16)
+                .canonical()
+                .iter(record.seq());
+            // loop over the record extracting minimizers
+            for (minimizer, _position, _is_rc) in min_iter {
+                max_token = max_token.max(minimizer);
+                mins.push(minimizer);
+            }
+            first_record = false;
         }
-        // assume we have only one record for now
-        let record = record.expect("Error reading record");
+    } else {
+        let mut input_vec = Vec::new();
+        let str_len = reader.read_to_end(&mut input_vec)?;
+        info!("read concatenated file with string of length {}", str_len);
         let min_iter = MinimizerBuilder::<u64>::new()
-            .minimizer_size(10)
-            .width(31)
+            .minimizer_size(cli.l)
+            .width(cli.w as u16)
             .canonical()
-            .iter(record.seq());
+            .iter(&input_vec);
         // loop over the record extracting minimizers
         for (minimizer, _position, _is_rc) in min_iter {
             max_token = max_token.max(minimizer);
             mins.push(minimizer);
         }
-        first_record = false;
     }
 
     // open the output file
